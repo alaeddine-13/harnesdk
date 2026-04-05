@@ -145,7 +145,7 @@ class AgentSession:
         self.system_prompt = system_prompt
         self.working_dir = working_dir
 
-        self._sandbox: Optional[AsyncSandbox] = None
+        self.sandbox: Optional[AsyncSandbox] = None
         self._session_id: Optional[str] = None   # tracks last conversation id
 
     # ------------------------------------------------------------------
@@ -169,17 +169,17 @@ class AgentSession:
         Called automatically by the async context manager.  Call manually only
         when you need explicit lifecycle control.
         """
-        if self._sandbox is not None:
+        if self.sandbox is not None:
             return
 
-        self._sandbox = await AsyncSandbox.create(
+        self.sandbox = await AsyncSandbox.create(
             self.template.value,
             envs={"ANTHROPIC_API_KEY": self.api_key},
             timeout=self.timeout,
         )
 
         if self.system_prompt:
-            await self._sandbox.files.write(
+            await self.sandbox.files.write(
                 f"{self.working_dir}/CLAUDE.md",
                 self.system_prompt,
             )
@@ -189,9 +189,9 @@ class AgentSession:
 
         Called automatically by the async context manager.
         """
-        if self._sandbox is not None:
-            await self._sandbox.kill()
-            self._sandbox = None
+        if self.sandbox is not None:
+            await self.sandbox.kill()
+            self.sandbox = None
             self._session_id = None
 
     # ------------------------------------------------------------------
@@ -216,7 +216,8 @@ class AgentSession:
         """
         self._require_open()
         cmd = self._build_command(prompt, streaming=False)
-        result = await self._sandbox.commands.run(  # type: ignore[union-attr]
+        # TODO: this actually will timeout when claude code runs a background server
+        result = await self.sandbox.commands.run(  # type: ignore[union-attr]
             cmd,
             cwd=self.working_dir,
         )
@@ -280,7 +281,8 @@ class AgentSession:
         async def _run_command() -> None:
             nonlocal line_buf
             try:
-                await self._sandbox.commands.run(  # type: ignore[union-attr]
+                # TODO: this actually will timeout when claude code runs a background server
+                await self.sandbox.commands.run(  # type: ignore[union-attr]
                     cmd,
                     cwd=self.working_dir,
                     on_stdout=_on_stdout,
@@ -313,7 +315,7 @@ class AgentSession:
     # ------------------------------------------------------------------
 
     def _require_open(self) -> None:
-        if self._sandbox is None:
+        if self.sandbox is None:
             raise RuntimeError(
                 "AgentSession is not open.  Use it as an async context manager "
                 "or call `await session.open()` first."
