@@ -8,21 +8,62 @@ Run major agents and harnesses programmatically, in a sandbox. Openclaw, Claude 
 * Created by [Alaeddine Abdessalem](https://github.com/alaeddine-13) | PyPI [@alaeddineabdessalem](https://pypi.org/user/alaeddineabdessalem/)
 * MIT License
 
-## Features
+## Installation
 
-* TODO
+```bash
+pip install harnesdk
+```
 
-## Documentation
+## Setup
 
-Documentation is built with [Zensical](https://zensical.org/) and deployed to GitHub Pages.
+Set the required environment variables:
 
-* **Live site:** https://alaeddine-13.github.io/harnesdk/
-* **Preview locally:** `just docs-serve` (serves at http://localhost:8000)
-* **Build:** `just docs-build`
+```bash
+export ANTHROPIC_API_KEY=your_anthropic_api_key
+export E2B_API_KEY=your_e2b_api_key
+```
 
-API documentation is auto-generated from docstrings using [mkdocstrings](https://mkdocstrings.github.io/).
+## Usage
 
-Docs deploy automatically on push to `main` via GitHub Actions. To enable this, go to your repo's Settings > Pages and set the source to **GitHub Actions**.
+### Run an agent and get output
+
+```python
+import asyncio
+from harnesdk.agent import AgentSession
+
+async with AgentSession() as session:
+    result = await session.run("Create a hello world HTTP server in Go")
+    print(result.output)
+```
+
+### Stream output in real time
+
+```python
+import asyncio
+from harnesdk.agent import AgentSession
+
+async with AgentSession() as session:
+    async for chunk in session.stream("Create a hello world HTTP server in Go"):
+        print(chunk, end="", flush=True)
+```
+
+### Run and serve an app from the sandbox (Jupyter)
+
+```python
+from harnesdk.agent import AgentSession
+from IPython.display import IFrame
+
+async with AgentSession() as session:
+    async for chunk in session.stream(
+        "build an 'introducing HarneSDK' html page, and serve it with python http server under port 8000. "
+        "Use this pattern nohup your-server-command > /tmp/server.log 2>&1 < /dev/null &"
+    ):
+        print(chunk)
+    page_url = session.sandbox.get_host(8000)
+    display(IFrame(f"https://{page_url}", width=700, height=400))
+```
+
+
 
 ## Development
 
@@ -39,20 +80,7 @@ uv tool install --editable .
 
 This installs the CLI globally but with live updates - any changes you make to the source code are immediately available when you run `harnesdk`.
 
-Run tests:
-
-```bash
-uv run pytest
-```
-
-Run quality checks (format, lint, type check, test):
-
-```bash
-just qa
-```
 
 ## Author
 
 harnesdk was created in 2026 by Alaeddine Abdessalem.
-
-Built with [Cookiecutter](https://github.com/cookiecutter/cookiecutter) and the [audreyfeldroy/cookiecutter-pypackage](https://github.com/audreyfeldroy/cookiecutter-pypackage) project template.
