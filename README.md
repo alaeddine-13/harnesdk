@@ -63,7 +63,15 @@ async with AgentSession() as session:
     display(IFrame(f"https://{page_url}", width=700, height=400))
 ```
 
+Output:
+```text
+I'll create an introductory HTML page for HarneSDK and serve it using Python's HTTP server on port 8000.
 
+The server is now running at **http://localhost:8000**
+```
+Generated app:
+
+<img src="docs/assets/app-demo.png" width="50%" />
 
 ## Development
 
