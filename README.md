@@ -5,7 +5,7 @@
 Run major agents and harnesses programmatically, in a sandbox. Openclaw, Claude Code, Hermes agent,...
 
 * [GitHub](https://github.com/alaeddine-13/harnesdk/) | [PyPI](https://pypi.org/project/harnesdk/) | [Documentation](https://alaeddine-13.github.io/harnesdk/)
-* Created by [Alaeddine Abdessalem](https://github.com/alaeddine-13) | PyPI [@alaeddineabdessalem](https://pypi.org/user/alaeddineabdessalem/)
+* Created by [Alaeddine Abdessalem](https://github.com/alaeddine-13)
 * MIT License
 
 ## Installation
