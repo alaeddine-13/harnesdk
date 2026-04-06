@@ -60,6 +60,7 @@ async with AgentSession() as session:
     ):
         print(chunk)
     page_url = session.sandbox.get_host(8000)
+    print(f"app live at {page_url}")
     display(IFrame(f"https://{page_url}", width=700, height=400))
 ```
 
@@ -68,6 +69,8 @@ Output:
 I'll create an introductory HTML page for HarneSDK and serve it using Python's HTTP server on port 8000.
 
 The server is now running at **http://localhost:8000**
+
+app live at 8000-7zerfgtyjcjpl79a141ez.e2b.app
 ```
 Generated app:
 
