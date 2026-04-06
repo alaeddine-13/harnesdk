@@ -23,6 +23,8 @@ export ANTHROPIC_API_KEY=your_anthropic_api_key
 export E2B_API_KEY=your_e2b_api_key
 ```
 
+> **Security Warning:** Use budgeted and short-lived API keys. AI agents living INSIDE a sandbox can be used to exfiltrate credentials with prompt injection. We're actively working on a solution.
+
 ## Usage
 
 ### Run an agent and get output
