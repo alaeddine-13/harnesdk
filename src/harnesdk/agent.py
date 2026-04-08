@@ -268,7 +268,7 @@ class AgentSession:
             if skill.url:
                 cmd = f"npx skills add {skill.url} --skill {skill.name} -a {agent_id} -y"
             else:
-                cmd = f"npx skill add {skill.name} -a {agent_id} -y"
+                cmd = f"npx skills add {skill.name} -a {agent_id} -y"
             await self.sandbox.commands.run(cmd, cwd=self.working_dir)
 
         for mcp in self.mcps:
