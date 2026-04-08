@@ -93,7 +93,7 @@ class Skill:
               url="https://github.com/coreyhaines31/marketingskills")
         # → npx skills add <url> --skill customer-research
     """
-    name: str
+    name: str = "*"
     url: Optional[str] = None
 
 
@@ -226,9 +226,9 @@ class AgentSession:
         agent_id = _HARNESS_AGENT_IDS[self.harness]
         for skill in self.skills:
             if skill.url:
-                cmd = f"npx skills add {skill.url} --skill {skill.name}"
+                cmd = f"npx skills add {skill.url} --skill {skill.name} -y"
             else:
-                cmd = f"npx skill add {skill.name} -a {agent_id}"
+                cmd = f"npx skill add {skill.name} -a {agent_id} -y"
             await self.sandbox.commands.run(cmd, cwd=self.working_dir)
 
     async def close(self) -> None:
