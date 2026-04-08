@@ -109,6 +109,31 @@ class McpServer:
 
 
 # ---------------------------------------------------------------------------
+# File I/O types
+# ---------------------------------------------------------------------------
+
+@dataclass
+class InputFile:
+    """A file to write into the sandbox before the agent prompt is executed.
+
+    The file is placed at *path* inside the sandbox.  Relative paths are
+    resolved against the session's ``working_dir``; absolute paths are used
+    as-is.
+
+    Attributes:
+        path:     Destination path inside the sandbox.
+        content:  File content as a ``str`` (text) or ``bytes`` (binary).
+
+    Example::
+
+        InputFile(path="data.csv", content="id,name\\n1,Alice\\n")
+        InputFile(path="/tmp/archive.tar.gz", content=b"\\x1f\\x8b...")
+    """
+    path: str
+    content: str | bytes
+
+
+# ---------------------------------------------------------------------------
 # Skill type
 # ---------------------------------------------------------------------------
 
@@ -142,18 +167,22 @@ class AgentResult:
     """The outcome of a completed agent run.
 
     Attributes:
-        output:      Combined stdout text from the agent process.
-        session_id:  Conversation session ID returned by Claude Code's JSON
-                     output format.  ``None`` for harnesses that don't expose
-                     one, or when the output could not be parsed.
-        raw_events:  All parsed JSONL event objects emitted during a streaming
-                     run.  Empty for non-streaming runs.
-        exit_code:   Process exit code from the sandbox command.
+        output:       Combined stdout text from the agent process.
+        session_id:   Conversation session ID returned by Claude Code's JSON
+                      output format.  ``None`` for harnesses that don't expose
+                      one, or when the output could not be parsed.
+        raw_events:   All parsed JSONL event objects emitted during a streaming
+                      run.  Empty for non-streaming runs.
+        exit_code:    Process exit code from the sandbox command.
+        output_files: Files read back from the sandbox after execution, keyed
+                      by the sandbox path that was requested.  Only populated
+                      when ``output_file_paths`` is passed to :meth:`run`.
     """
     output: str
     session_id: Optional[str] = None
     raw_events: list[dict] = field(default_factory=list)
     exit_code: int = 0
+    output_files: dict[str, bytes] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -260,6 +289,7 @@ class AgentSession:
 
         self.sandbox: Optional[AsyncSandbox] = None
         self._session_id: Optional[str] = None   # tracks last conversation id
+        self.output_files: dict[str, bytes] = {}  # populated after run() / stream()
 
     # ------------------------------------------------------------------
     # Context-manager protocol
@@ -338,20 +368,32 @@ class AgentSession:
     async def run(
         self,
         prompt: str,
+        input_files: Optional[list[InputFile]] = None,
+        output_file_paths: Optional[list[str]] = None,
     ) -> AgentResult:
         """Execute the agent with *prompt* and wait for it to finish.
 
         Args:
-            prompt:  The task description to hand to the agent.
+            prompt:            The task description to hand to the agent.
+            input_files:       Optional list of :class:`InputFile` objects to
+                               write into the sandbox before the agent runs.
+                               Relative paths are resolved against
+                               ``working_dir``; absolute paths are used as-is.
+            output_file_paths: Optional list of sandbox file paths to read back
+                               after the agent finishes.  The retrieved content
+                               is available in :attr:`AgentResult.output_files`
+                               and on ``session.output_files``.
 
         Returns:
-            An :class:`AgentResult` with the full output text and metadata.
+            An :class:`AgentResult` with the full output text, metadata, and
+            any requested output files.
 
         Raises:
             RuntimeError: If :meth:`open` has not been called (or the context
                           manager has not been entered).
         """
         self._require_open()
+        await self._write_input_files(input_files or [])
         cmd = self._build_command(prompt, streaming=False)
         # TODO: this actually will timeout when claude code runs a background server
         result = await self.sandbox.commands.run(  # type: ignore[union-attr]
@@ -362,11 +404,16 @@ class AgentSession:
         agent_result = self._parse_json_output(result.stdout, result.exit_code)
         if agent_result.session_id:
             self._session_id = agent_result.session_id
+
+        self.output_files = await self._read_output_files(output_file_paths or [])
+        agent_result.output_files = self.output_files
         return agent_result
 
     async def stream(
         self,
         prompt: str,
+        input_files: Optional[list[InputFile]] = None,
+        output_file_paths: Optional[list[str]] = None,
     ) -> AsyncIterator[str]:
         """Execute the agent and yield text chunks as they arrive.
 
@@ -374,8 +421,18 @@ class AgentSession:
         can print or process them in real time.  The conversation session ID
         (if any) is captured automatically after the stream is exhausted.
 
+        After the generator is exhausted, any requested output files are
+        available on ``session.output_files``.
+
         Args:
-            prompt:  The task description to hand to the agent.
+            prompt:            The task description to hand to the agent.
+            input_files:       Optional list of :class:`InputFile` objects to
+                               write into the sandbox before the agent runs.
+                               Relative paths are resolved against
+                               ``working_dir``; absolute paths are used as-is.
+            output_file_paths: Optional list of sandbox file paths to read back
+                               after the stream is exhausted.  The content is
+                               stored in ``session.output_files``.
 
         Yields:
             Raw text chunks from the agent's stdout stream.
@@ -384,8 +441,11 @@ class AgentSession:
 
             async for chunk in session.stream("Refactor the auth module"):
                 print(chunk, end="", flush=True)
+            # output files available here:
+            report = session.output_files.get("/home/user/report.md")
         """
         self._require_open()
+        await self._write_input_files(input_files or [])
         cmd = self._build_command(prompt, streaming=True)
 
         events: list[dict] = []
@@ -447,9 +507,32 @@ class AgentSession:
                 self._session_id = event["session_id"]
                 break
 
+        self.output_files = await self._read_output_files(output_file_paths or [])
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _resolve_sandbox_path(self, path: str) -> str:
+        """Return an absolute sandbox path, resolving relative paths against working_dir."""
+        if path.startswith("/"):
+            return path
+        return f"{self.working_dir}/{path}"
+
+    async def _write_input_files(self, files: list[InputFile]) -> None:
+        """Write *files* into the sandbox before the agent prompt runs."""
+        for f in files:
+            dest = self._resolve_sandbox_path(f.path)
+            await self.sandbox.files.write(dest, f.content)  # type: ignore[union-attr]
+
+    async def _read_output_files(self, paths: list[str]) -> dict[str, bytes]:
+        """Read *paths* from the sandbox and return their contents keyed by path."""
+        result: dict[str, bytes] = {}
+        for path in paths:
+            abs_path = self._resolve_sandbox_path(path)
+            content = await self.sandbox.files.read(abs_path)  # type: ignore[union-attr]
+            result[path] = content if isinstance(content, bytes) else content.encode()
+        return result
 
     def _has_s3_config(self) -> bool:
         """Return True when all required AWS S3 credentials and bucket are set."""
