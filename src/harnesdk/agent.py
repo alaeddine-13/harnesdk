@@ -114,6 +114,9 @@ class AgentSession:
                           inside the sandbox before the first run.
         working_dir:      Working directory used for all commands executed
                           inside the sandbox (default: ``/home/user``).
+        skills:           Optional list of skill names to install via
+                          ``npx skill add <name> -a claude-code`` during
+                          sandbox setup.
 
     Examples::
 
@@ -137,6 +140,7 @@ class AgentSession:
         timeout: int = 300,
         system_prompt: Optional[str] = None,
         working_dir: str = "/home/user",
+        skills: Optional[list[str]] = None,
     ) -> None:
         self.harness = harness
         self.template = template or _HARNESS_DEFAULTS[harness]
@@ -144,6 +148,7 @@ class AgentSession:
         self.timeout = timeout
         self.system_prompt = system_prompt
         self.working_dir = working_dir
+        self.skills = skills or []
 
         self.sandbox: Optional[AsyncSandbox] = None
         self._session_id: Optional[str] = None   # tracks last conversation id
@@ -182,6 +187,12 @@ class AgentSession:
             await self.sandbox.files.write(
                 f"{self.working_dir}/CLAUDE.md",
                 self.system_prompt,
+            )
+
+        for skill in self.skills:
+            await self.sandbox.commands.run(
+                f"npx skill add {skill} -a claude-code",
+                cwd=self.working_dir,
             )
 
     async def close(self) -> None:
