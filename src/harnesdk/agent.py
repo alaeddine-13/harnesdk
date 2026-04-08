@@ -73,6 +73,42 @@ _HARNESS_AGENT_IDS: dict[AgentHarness, str] = {
 
 
 # ---------------------------------------------------------------------------
+# MCP server type
+# ---------------------------------------------------------------------------
+
+@dataclass
+class McpServer:
+    """An MCP server to register with the agent before running.
+
+    Maps directly to the ``claude mcp add`` CLI arguments::
+
+        McpServer(
+            name="dansugc",
+            url="https://dansugc.com/api/mcp",
+            transport="http",
+            scope="user",
+            headers={"Authorization": "Bearer dsk_YOUR_API_KEY"},
+        )
+        # → claude mcp add --transport http -s user dansugc \\
+        #     https://dansugc.com/api/mcp \\
+        #     -H "Authorization: Bearer dsk_YOUR_API_KEY"
+
+    Attributes:
+        name:       Identifier for this MCP server (used in ``claude mcp add``).
+        url:        The MCP server endpoint URL.
+        transport:  Transport protocol (default: ``"http"``).
+        scope:      Registration scope passed via ``-s`` (default: ``"user"``).
+        headers:    Optional HTTP headers to forward with every request,
+                    e.g. ``{"Authorization": "Bearer <token>"}``.
+    """
+    name: str
+    url: str
+    transport: str = "http"
+    scope: str = "user"
+    headers: Optional[dict[str, str]] = None
+
+
+# ---------------------------------------------------------------------------
 # Skill type
 # ---------------------------------------------------------------------------
 
@@ -148,6 +184,8 @@ class AgentSession:
                           sandbox setup.  Named skills use
                           ``npx skill add <name> -a <agent-id>``; URL skills
                           use ``npx skills add <url> --skill <name>``.
+        mcps:             Optional list of :class:`McpServer` instances to
+                          register via ``claude mcp add`` during sandbox setup.
 
     Examples::
 
@@ -172,6 +210,7 @@ class AgentSession:
         system_prompt: Optional[str] = None,
         working_dir: str = "/home/user",
         skills: Optional[list[Skill | str]] = None,
+        mcps: Optional[list[McpServer]] = None,
     ) -> None:
         self.harness = harness
         self.template = template or _HARNESS_DEFAULTS[harness]
@@ -183,6 +222,7 @@ class AgentSession:
             Skill(name=s) if isinstance(s, str) else s
             for s in (skills or [])
         ]
+        self.mcps: list[McpServer] = list(mcps or [])
 
         self.sandbox: Optional[AsyncSandbox] = None
         self._session_id: Optional[str] = None   # tracks last conversation id
@@ -229,6 +269,19 @@ class AgentSession:
                 cmd = f"npx skills add {skill.url} --skill {skill.name} -a {agent_id} -y"
             else:
                 cmd = f"npx skill add {skill.name} -a {agent_id} -y"
+            await self.sandbox.commands.run(cmd, cwd=self.working_dir)
+
+        for mcp in self.mcps:
+            cmd = (
+                f"claude mcp add --transport {mcp.transport}"
+                f" -s {mcp.scope}"
+                f" {mcp.name}"
+                f" {mcp.url}"
+            )
+            if mcp.headers:
+                for header_name, header_value in mcp.headers.items():
+                    safe_value = header_value.replace('"', '\\"')
+                    cmd += f' -H "{header_name}: {safe_value}"'
             await self.sandbox.commands.run(cmd, cwd=self.working_dir)
 
     async def close(self) -> None:
