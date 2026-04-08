@@ -67,6 +67,35 @@ _HARNESS_ENTRY_POINTS: dict[AgentHarness, str] = {
     AgentHarness.CLAUDE_CODE: "claude",
 }
 
+_HARNESS_AGENT_IDS: dict[AgentHarness, str] = {
+    AgentHarness.CLAUDE_CODE: "claude-code",
+}
+
+
+# ---------------------------------------------------------------------------
+# Skill type
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Skill:
+    """A skill to install in the sandbox before running the agent.
+
+    Two installation patterns are supported:
+
+    * **Named skill** – installs from the registry::
+
+        Skill(name="commit")
+        # → npx skill add commit -a <harness-agent-id>
+
+    * **URL skill** – installs from a GitHub (or other) URL::
+
+        Skill(name="customer-research",
+              url="https://github.com/coreyhaines31/marketingskills")
+        # → npx skills add <url> --skill customer-research
+    """
+    name: str
+    url: Optional[str] = None
+
 
 # ---------------------------------------------------------------------------
 # Result type
@@ -114,9 +143,11 @@ class AgentSession:
                           inside the sandbox before the first run.
         working_dir:      Working directory used for all commands executed
                           inside the sandbox (default: ``/home/user``).
-        skills:           Optional list of skill names to install via
-                          ``npx skill add <name> -a claude-code`` during
-                          sandbox setup.
+        skills:           Optional list of :class:`Skill` instances (or plain
+                          strings for simple named skills) to install during
+                          sandbox setup.  Named skills use
+                          ``npx skill add <name> -a <agent-id>``; URL skills
+                          use ``npx skills add <url> --skill <name>``.
 
     Examples::
 
@@ -140,7 +171,7 @@ class AgentSession:
         timeout: int = 300,
         system_prompt: Optional[str] = None,
         working_dir: str = "/home/user",
-        skills: Optional[list[str]] = None,
+        skills: Optional[list[Skill | str]] = None,
     ) -> None:
         self.harness = harness
         self.template = template or _HARNESS_DEFAULTS[harness]
@@ -148,7 +179,10 @@ class AgentSession:
         self.timeout = timeout
         self.system_prompt = system_prompt
         self.working_dir = working_dir
-        self.skills = skills or []
+        self.skills: list[Skill] = [
+            Skill(name=s) if isinstance(s, str) else s
+            for s in (skills or [])
+        ]
 
         self.sandbox: Optional[AsyncSandbox] = None
         self._session_id: Optional[str] = None   # tracks last conversation id
@@ -189,11 +223,13 @@ class AgentSession:
                 self.system_prompt,
             )
 
+        agent_id = _HARNESS_AGENT_IDS[self.harness]
         for skill in self.skills:
-            await self.sandbox.commands.run(
-                f"npx skill add {skill} -a claude-code",
-                cwd=self.working_dir,
-            )
+            if skill.url:
+                cmd = f"npx skills add {skill.url} --skill {skill.name}"
+            else:
+                cmd = f"npx skill add {skill.name} -a {agent_id}"
+            await self.sandbox.commands.run(cmd, cwd=self.working_dir)
 
     async def close(self) -> None:
         """Terminate the sandbox and free all resources.
