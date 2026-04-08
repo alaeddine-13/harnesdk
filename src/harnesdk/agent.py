@@ -168,24 +168,37 @@ class AgentSession:
     manager unless you call ``open()`` / ``close()`` manually.
 
     Args:
-        harness:          Which agent harness to run (default: ``CLAUDE_CODE``).
-        template:         E2B sandbox template to use.  Defaults to the
-                          harness-specific default when omitted.
-        api_key:          Anthropic API key.  Falls back to the
-                          ``ANTHROPIC_API_KEY`` environment variable.
-        timeout:          Sandbox inactivity timeout
-                          (default: 300 — 5 minutes).
-        system_prompt:    Optional instruction block written to ``CLAUDE.md``
-                          inside the sandbox before the first run.
-        working_dir:      Working directory used for all commands executed
-                          inside the sandbox (default: ``/home/user``).
-        skills:           Optional list of :class:`Skill` instances (or plain
-                          strings for simple named skills) to install during
-                          sandbox setup.  Named skills use
-                          ``npx skill add <name> -a <agent-id>``; URL skills
-                          use ``npx skills add <url> --skill <name>``.
-        mcps:             Optional list of :class:`McpServer` instances to
-                          register via ``claude mcp add`` during sandbox setup.
+        harness:               Which agent harness to run (default: ``CLAUDE_CODE``).
+        template:              E2B sandbox template to use.  Defaults to the
+                               harness-specific default when omitted.
+        api_key:               Anthropic API key.  Falls back to the
+                               ``ANTHROPIC_API_KEY`` environment variable.
+        timeout:               Sandbox inactivity timeout
+                               (default: 300 — 5 minutes).
+        system_prompt:         Optional instruction block written to ``CLAUDE.md``
+                               inside the sandbox before the first run.
+        working_dir:           Working directory used for all commands executed
+                               inside the sandbox (default: ``/home/user``).
+        skills:                Optional list of :class:`Skill` instances (or plain
+                               strings for simple named skills) to install during
+                               sandbox setup.  Named skills use
+                               ``npx skill add <name> -a <agent-id>``; URL skills
+                               use ``npx skills add <url> --skill <name>``.
+        mcps:                  Optional list of :class:`McpServer` instances to
+                               register via ``claude mcp add`` during sandbox setup.
+        aws_access_key_id:     AWS access key ID for S3 bucket syncing.  Falls back
+                               to the ``AWS_ACCESS_KEY_ID`` environment variable.
+        aws_secret_access_key: AWS secret access key for S3 bucket syncing.  Falls
+                               back to the ``AWS_SECRET_ACCESS_KEY`` environment
+                               variable.
+        aws_s3_bucket:         Name of the S3 bucket to mount inside the sandbox.
+                               Falls back to the ``AWS_S3_BUCKET`` environment
+                               variable.  S3 syncing is only enabled when this,
+                               ``aws_access_key_id``, and ``aws_secret_access_key``
+                               are all set.
+        aws_s3_mount_path:     Path inside the sandbox where the S3 bucket will be
+                               mounted (default: ``<working_dir>/bucket``).  Falls
+                               back to the ``AWS_S3_MOUNT_PATH`` environment variable.
 
     Examples::
 
@@ -198,6 +211,14 @@ class AgentSession:
         async with AgentSession(system_prompt="You write only Go code.") as s:
             r1 = await s.run("Create an HTTP server")
             r2 = await s.run("Add a /healthz endpoint")   # continues same chat
+
+        # With S3 bucket mounted (credentials can also come from env vars)
+        async with AgentSession(
+            aws_access_key_id="AKIA...",
+            aws_secret_access_key="secret",
+            aws_s3_bucket="my-bucket",
+        ) as session:
+            result = await session.run("List files in ~/bucket")
     """
 
     def __init__(
@@ -211,6 +232,10 @@ class AgentSession:
         working_dir: str = "/home/user",
         skills: Optional[list[Skill | str]] = None,
         mcps: Optional[list[McpServer]] = None,
+        aws_access_key_id: Optional[str] = None,
+        aws_secret_access_key: Optional[str] = None,
+        aws_s3_bucket: Optional[str] = None,
+        aws_s3_mount_path: Optional[str] = None,
     ) -> None:
         self.harness = harness
         self.template = template or _HARNESS_DEFAULTS[harness]
@@ -223,6 +248,15 @@ class AgentSession:
             for s in (skills or [])
         ]
         self.mcps: list[McpServer] = list(mcps or [])
+
+        self.aws_access_key_id = aws_access_key_id or os.environ.get("AWS_ACCESS_KEY_ID")
+        self.aws_secret_access_key = aws_secret_access_key or os.environ.get("AWS_SECRET_ACCESS_KEY")
+        self.aws_s3_bucket = aws_s3_bucket or os.environ.get("AWS_S3_BUCKET")
+        self.aws_s3_mount_path = (
+            aws_s3_mount_path
+            or os.environ.get("AWS_S3_MOUNT_PATH")
+            or f"{working_dir}/bucket"
+        )
 
         self.sandbox: Optional[AsyncSandbox] = None
         self._session_id: Optional[str] = None   # tracks last conversation id
@@ -283,6 +317,9 @@ class AgentSession:
                     safe_value = header_value.replace('"', '\\"')
                     cmd += f' -H "{header_name}: {safe_value}"'
             await self.sandbox.commands.run(cmd, cwd=self.working_dir)
+
+        if self._has_s3_config():
+            await self._setup_s3_sync()
 
     async def close(self) -> None:
         """Terminate the sandbox and free all resources.
@@ -413,6 +450,47 @@ class AgentSession:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _has_s3_config(self) -> bool:
+        """Return True when all required AWS S3 credentials and bucket are set."""
+        return bool(
+            self.aws_access_key_id
+            and self.aws_secret_access_key
+            and self.aws_s3_bucket
+        )
+
+    async def _setup_s3_sync(self) -> None:
+        """Mount the configured S3 bucket inside the sandbox using s3fs.
+
+        Installs ``s3fs`` via apt, writes the credentials file to
+        ``/root/.passwd-s3fs``, and mounts the bucket at
+        ``self.aws_s3_mount_path`` with the ``allow_other`` flag so the default
+        sandbox user can read and write files.
+
+        Note:
+            For better startup performance, consider building a custom E2B
+            template with ``s3fs`` pre-installed (``apt-get install -y s3fs``).
+        """
+        assert self.sandbox is not None  # guaranteed by open()
+
+        # Install s3fs if not already available in the template
+        await self.sandbox.commands.run(
+            "apt-get install -y s3fs",
+            cwd=self.working_dir,
+        )
+
+        # Create the mount directory
+        await self.sandbox.files.make_dir(self.aws_s3_mount_path)
+
+        # Write the credentials file expected by s3fs
+        creds = f"{self.aws_access_key_id}:{self.aws_secret_access_key}"
+        await self.sandbox.files.write("/root/.passwd-s3fs", creds)
+        await self.sandbox.commands.run("chmod 600 /root/.passwd-s3fs")
+
+        # Mount the bucket; allow_other lets the default (non-root) user access files
+        await self.sandbox.commands.run(
+            f"s3fs -o allow_other {self.aws_s3_bucket} {self.aws_s3_mount_path}",
+        )
 
     def _require_open(self) -> None:
         if self.sandbox is None:
