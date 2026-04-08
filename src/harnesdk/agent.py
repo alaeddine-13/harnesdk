@@ -226,7 +226,7 @@ class AgentSession:
         agent_id = _HARNESS_AGENT_IDS[self.harness]
         for skill in self.skills:
             if skill.url:
-                cmd = f"npx skills add {skill.url} --skill {skill.name}"
+                cmd = f"npx skills add {skill.url} --skill {skill.name} -a {agent_id}"
             else:
                 cmd = f"npx skill add {skill.name} -a {agent_id}"
             await self.sandbox.commands.run(cmd, cwd=self.working_dir)
