@@ -1,0 +1,11 @@
+<nav>
+  <div class="nav-inner">
+    <a href="{{ site.baseurl }}/" class="nav-logo">Harne<span>SDK</span></a>
+    <div class="nav-links">
+      <a href="{{ site.baseurl }}/" {% if page.url == '/' %}class="active"{% endif %}>Docs</a>
+      <a href="{{ site.baseurl }}/blog" {% if page.url contains '/blog' %}class="active"{% endif %}>Blog</a>
+      <a href="https://github.com/{{ site.github_username }}/harnesdk" target="_blank">GitHub</a>
+      <a href="https://pypi.org/project/{{ site.pypi_package }}/" target="_blank">PyPI</a>
+    </div>
+  </div>
+</nav>

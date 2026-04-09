@@ -1,0 +1,125 @@
+---
+layout: default
+title: Documentation
+---
+
+<div class="hero">
+  <div class="hero-badge">Python SDK</div>
+  <h1>Run AI agents<br>in <span>sandboxed</span> environments</h1>
+  <p class="hero-desc">
+    HarneSDK lets you run Claude Code, OpenHands, and other AI agents
+    programmatically inside secure E2B sandboxes — stream output, serve apps,
+    and automate complex workflows with a clean Python API.
+  </p>
+  <div class="hero-actions">
+    <a href="#quickstart" class="btn btn-primary">Get Started</a>
+    <a href="{{ site.baseurl }}/blog" class="btn btn-secondary">Read the Blog</a>
+    <a href="https://github.com/{{ site.github_username }}/harnesdk" class="btn btn-secondary" target="_blank">GitHub</a>
+  </div>
+
+  <div style="margin-top:2.5rem">
+    <div class="code-label">Install</div>
+    <div class="code-block">
+      <pre>pip install harnesdk</pre>
+    </div>
+  </div>
+</div>
+
+<div class="container">
+
+  <!-- Features -->
+  <section class="features">
+    <h2 class="section-title">Why HarneSDK?</h2>
+    <p class="section-sub">Everything you need to run agents reliably in production.</p>
+    <div class="cards">
+      <div class="card">
+        <div class="card-icon">🔒</div>
+        <h3>Sandboxed by default</h3>
+        <p>Every agent runs in an isolated E2B sandbox. No code escapes, no dependencies conflict.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon">⚡</div>
+        <h3>Real-time streaming</h3>
+        <p>Stream agent output token-by-token or collect the full result — your choice.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon">🌐</div>
+        <h3>Serve live apps</h3>
+        <p>Expose ports from inside the sandbox and get a public URL instantly.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon">🔌</div>
+        <h3>Extensible</h3>
+        <p>Add custom skills and MCP servers to extend agent capabilities for your use case.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Quickstart -->
+  <section class="install-section" id="quickstart">
+    <h2 class="section-title">Quickstart</h2>
+    <p class="section-sub">Up and running in under two minutes.</p>
+
+    <div class="install-grid">
+      <div class="install-block">
+        <h4>1. Install</h4>
+        <code>pip install harnesdk</code>
+      </div>
+      <div class="install-block">
+        <h4>2. Set API keys</h4>
+        <code>export ANTHROPIC_API_KEY=...</code><br/>
+        <code style="display:block;margin-top:0.4rem">export E2B_API_KEY=...</code>
+      </div>
+    </div>
+
+    <div style="margin-top:1.5rem">
+      <div class="code-label">Run an agent and get output</div>
+      <div class="code-block">
+<pre><span class="kw">import</span> asyncio
+<span class="kw">from</span> harnesdk.agent <span class="kw">import</span> AgentSession
+
+<span class="kw">async def</span> <span class="fn">main</span>():
+    <span class="kw">async with</span> AgentSession() <span class="kw">as</span> session:
+        result = <span class="kw">await</span> session.run(<span class="str">"Create a hello world HTTP server in Go"</span>)
+        <span class="fn">print</span>(result.output)
+
+asyncio.run(<span class="fn">main</span>())</pre>
+      </div>
+    </div>
+
+    <div>
+      <div class="code-label">Stream output in real time</div>
+      <div class="code-block">
+<pre><span class="kw">async with</span> AgentSession() <span class="kw">as</span> session:
+    <span class="kw">async for</span> chunk <span class="kw">in</span> session.stream(<span class="str">"Build a REST API in Python"</span>):
+        <span class="fn">print</span>(chunk, end=<span class="str">""</span>, flush=<span class="kw2">True</span>)</pre>
+      </div>
+    </div>
+
+    <div>
+      <div class="code-label">Serve an app from the sandbox</div>
+      <div class="code-block">
+<pre><span class="kw">async with</span> AgentSession() <span class="kw">as</span> session:
+    <span class="kw">async for</span> chunk <span class="kw">in</span> session.stream(
+        <span class="str">"Build a dashboard and serve it on port 8000. "</span>
+        <span class="str">"Use: nohup python -m http.server 8000 > /tmp/s.log 2>&1 < /dev/null &"</span>
+    ):
+        <span class="fn">print</span>(chunk)
+
+    url = session.sandbox.get_host(<span class="kw2">8000</span>)
+    <span class="fn">print</span>(<span class="str">f"Live at https://{url}"</span>)</pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- Security note -->
+  <section style="padding:2.5rem 0; border-top:1px solid var(--border);">
+    <h2 class="section-title">Security notice</h2>
+    <p style="color:var(--text-muted); max-width:660px">
+      Use short-lived, budget-limited API keys. AI agents running inside a sandbox
+      may be susceptible to prompt injection attacks that attempt to exfiltrate
+      credentials. We are actively working on hardened credential isolation.
+    </p>
+  </section>
+
+</div>

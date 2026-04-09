@@ -1,0 +1,16 @@
+title: HarneSDK
+description: Run major AI agents and harnesses programmatically, in a sandbox.
+baseurl: "/harnesdk"
+url: "https://alaeddine-13.github.io"
+author: Alaeddine Abdessalem
+github_username: alaeddine-13
+pypi_package: harnesdk
+
+markdown: kramdown
+permalink: /blog/:year/:month/:day/:title/
+
+exclude:
+  - Gemfile
+  - Gemfile.lock
+  - node_modules
+  - vendor/

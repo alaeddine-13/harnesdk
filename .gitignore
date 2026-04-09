@@ -48,6 +48,10 @@ dmypy.json
 
 # Documentation build output
 site/
+docs/_site/
+docs/.jekyll-cache/
+docs/.jekyll-metadata
+docs/Gemfile.lock
 
 # IDE files
 # .idea/
