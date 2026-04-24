@@ -109,6 +109,52 @@ class McpServer:
 
 
 # ---------------------------------------------------------------------------
+# Dependency types
+# ---------------------------------------------------------------------------
+
+class PackageManager(str, Enum):
+    """Supported package managers for installing sandbox dependencies.
+
+    * ``UV``  – Python package manager (``uv pip install <pkg>``)
+    * ``BUN`` – JavaScript runtime / package manager (``bun add <pkg>``)
+    * ``NPM`` – Node package manager (``npm install <pkg>``)
+    * ``PIP`` – Standard Python package installer (``pip install <pkg>``)
+    """
+    UV = "uv"
+    BUN = "bun"
+    NPM = "npm"
+    PIP = "pip"
+
+
+_PM_INSTALL_COMMANDS: dict[PackageManager, str] = {
+    PackageManager.UV: "uv pip install",
+    PackageManager.BUN: "bun add",
+    PackageManager.NPM: "npm install",
+    PackageManager.PIP: "pip install",
+}
+
+
+@dataclass
+class Dependency:
+    """A package to install in the sandbox before running the agent.
+
+    Example::
+
+        Dependency(name="requests", package_manager=PackageManager.PIP)
+        # → pip install requests
+
+        Dependency(name="axios", package_manager=PackageManager.NPM)
+        # → npm install axios
+
+    Attributes:
+        name:            Package name (as recognised by the package manager).
+        package_manager: Which package manager to use (default: ``PIP``).
+    """
+    name: str
+    package_manager: PackageManager = PackageManager.PIP
+
+
+# ---------------------------------------------------------------------------
 # Skill type
 # ---------------------------------------------------------------------------
 
@@ -186,6 +232,11 @@ class AgentSession:
                           use ``npx skills add <url> --skill <name>``.
         mcps:             Optional list of :class:`McpServer` instances to
                           register via ``claude mcp add`` during sandbox setup.
+        dependencies:     Optional list of :class:`Dependency` instances to
+                          install in the sandbox before the agent runs.  Each
+                          dependency specifies a package name and which package
+                          manager to use (``uv``, ``bun``, ``npm``, or
+                          ``pip``).
 
     Examples::
 
@@ -211,6 +262,7 @@ class AgentSession:
         working_dir: str = "/home/user",
         skills: Optional[list[Skill | str]] = None,
         mcps: Optional[list[McpServer]] = None,
+        dependencies: Optional[list[Dependency]] = None,
     ) -> None:
         self.harness = harness
         self.template = template or _HARNESS_DEFAULTS[harness]
@@ -223,6 +275,7 @@ class AgentSession:
             for s in (skills or [])
         ]
         self.mcps: list[McpServer] = list(mcps or [])
+        self.dependencies: list[Dependency] = list(dependencies or [])
 
         self.sandbox: Optional[AsyncSandbox] = None
         self._session_id: Optional[str] = None   # tracks last conversation id
@@ -262,6 +315,10 @@ class AgentSession:
                 f"{self.working_dir}/CLAUDE.md",
                 self.system_prompt,
             )
+
+        for dep in self.dependencies:
+            cmd = f"{_PM_INSTALL_COMMANDS[dep.package_manager]} {dep.name}"
+            await self.sandbox.commands.run(cmd, cwd=self.working_dir)
 
         agent_id = _HARNESS_AGENT_IDS[self.harness]
         for skill in self.skills:
