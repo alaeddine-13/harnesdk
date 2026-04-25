@@ -31,8 +31,6 @@ from typing import ClassVar, Literal
 from harnesdk.agent import (
     AgentResult,
     AgentSession,
-    McpServer,
-    Skill,
     StreamProcessor,
 )
 
@@ -130,23 +128,13 @@ class ClaudeAgentSession(AgentSession):
         model: str | None = None,
         api_key: str | None = None,
         log_level: Literal["default", "all"] = "default",
-        template: str | None = None,
-        timeout: int = 300,
-        system_prompt: str | None = None,
-        working_dir: str = "/home/user",
-        skills: list[Skill | str] | None = None,
-        mcps: list[McpServer] | None = None,
         env: dict[str, str] | None = None,
+        **kwargs,
     ) -> None:
         super().__init__(
-            template=template,
-            timeout=timeout,
             log_level=log_level,
-            system_prompt=system_prompt,
-            working_dir=working_dir,
-            skills=skills,
-            mcps=mcps,
             env=env,
+            **kwargs,
         )
         self.model = model
         self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")

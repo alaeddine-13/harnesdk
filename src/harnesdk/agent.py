@@ -35,6 +35,8 @@ Usage example::
 from __future__ import annotations
 
 import asyncio
+import os
+import shlex
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -192,6 +194,9 @@ class AgentSession(ABC):
                           register during sandbox setup.
         env:              Optional environment variables to inject into the
                           sandbox in addition to harness defaults.
+        upload_files:     Optional mapping of local host file paths to target
+                          sandbox file paths. Each file is uploaded during
+                          :meth:`open` before prompt/skill/MCP setup.
 
     Example::
 
@@ -214,6 +219,7 @@ class AgentSession(ABC):
         skills: list[Skill | str] | None = None,
         mcps: list[McpServer] | None = None,
         env: dict[str, str] | None = None,
+        upload_files: dict[str, str] | None = None,
     ) -> None:
         self.template = template or self.default_template
         if not self.template:
@@ -233,6 +239,7 @@ class AgentSession(ABC):
         ]
         self.mcps: list[McpServer] = list(mcps or [])
         self.env: dict[str, str] = dict(env or {})
+        self.upload_files: dict[str, str] = dict(upload_files or {})
 
         self.sandbox: AsyncSandbox | None = None
         self._session_id: str | None = None
@@ -276,6 +283,24 @@ class AgentSession(ABC):
         Default: no-op.  Subclasses override to invoke the appropriate CLI or
         write the appropriate config file.
         """
+
+    async def _upload_files(self) -> None:
+        """Upload host files specified in :attr:`upload_files` to sandbox."""
+        if not self.upload_files:
+            return
+
+        for local_path, target_path in self.upload_files.items():
+            target_dir = os.path.dirname(target_path)
+            if target_dir:
+                await self.sandbox.commands.run(  # type: ignore[union-attr]
+                    f"mkdir -p {shlex.quote(target_dir)}",
+                    cwd=self.working_dir,
+                )
+            with open(local_path, "rb") as file_obj:
+                await self.sandbox.files.write(  # type: ignore[union-attr]
+                    target_path,
+                    file_obj,
+                )
 
     # ------------------------------------------------------------------
     # Output parsing hooks
@@ -337,6 +362,7 @@ class AgentSession(ABC):
             timeout=self.timeout,
         )
 
+        await self._upload_files()
         await self._setup_system_prompt()
         await self._install_skills()
         await self._register_mcps()
