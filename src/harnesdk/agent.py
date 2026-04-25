@@ -42,6 +42,10 @@ from typing import ClassVar, Literal
 
 from e2b import AsyncSandbox
 
+from harnesdk.logging_utils import build_logger
+
+LOGGER = build_logger("harnesdk.agent")
+
 # ---------------------------------------------------------------------------
 # MCP server type
 # ---------------------------------------------------------------------------
@@ -312,8 +316,15 @@ class AgentSession(ABC):
         when you need explicit lifecycle control.
         """
         if self.sandbox is not None:
+            LOGGER.debug("%s.open() skipped (already open).", type(self).__name__)
             return
 
+        LOGGER.info(
+            "Opening %s sandbox (template=%s, timeout=%ss).",
+            type(self).__name__,
+            self.template,
+            self.timeout,
+        )
         self.sandbox = await AsyncSandbox.create(
             self.template,
             envs=self._env_vars(),
@@ -323,13 +334,17 @@ class AgentSession(ABC):
         await self._setup_system_prompt()
         await self._install_skills()
         await self._register_mcps()
+        LOGGER.info("Sandbox ready for %s.", type(self).__name__)
 
     async def close(self) -> None:
         """Terminate the sandbox and free all resources."""
         if self.sandbox is not None:
+            LOGGER.info("Closing sandbox for %s.", type(self).__name__)
             await self.sandbox.kill()
             self.sandbox = None
             self._session_id = None
+        else:
+            LOGGER.debug("%s.close() skipped (already closed).", type(self).__name__)
 
     # ------------------------------------------------------------------
     # Execution
@@ -349,6 +364,8 @@ class AgentSession(ABC):
         """
         self._require_open()
         cmd = self._build_command(prompt, streaming=False)
+        LOGGER.info("Running non-streaming command for %s.", type(self).__name__)
+        LOGGER.debug("Command: %s", cmd)
         # TODO: this actually will timeout when the agent runs a background server
         result = await self.sandbox.commands.run(  # type: ignore[union-attr]
             cmd,
@@ -357,8 +374,10 @@ class AgentSession(ABC):
         )
 
         agent_result = self._parse_output(result.stdout, result.exit_code)
+        LOGGER.info("Run completed with exit_code=%s.", result.exit_code)
         if agent_result.session_id:
             self._session_id = agent_result.session_id
+            LOGGER.debug("Updated session_id=%s", self._session_id)
         return agent_result
 
     async def stream(self, prompt: str) -> AsyncIterator[str]:
@@ -377,6 +396,8 @@ class AgentSession(ABC):
         """
         self._require_open()
         cmd = self._build_command(prompt, streaming=True)
+        LOGGER.info("Running streaming command for %s.", type(self).__name__)
+        LOGGER.debug("Command: %s", cmd)
 
         processor = self._make_stream_processor()
         out_queue: asyncio.Queue[str | object] = asyncio.Queue()
@@ -398,6 +419,7 @@ class AgentSession(ABC):
                 for chunk in processor.flush():
                     if chunk:
                         await out_queue.put(chunk)
+                LOGGER.info("Streaming command completed.")
             finally:
                 await out_queue.put(stream_end)
 
@@ -414,6 +436,7 @@ class AgentSession(ABC):
         session_id = processor.session_id
         if session_id:
             self._session_id = session_id
+            LOGGER.debug("Updated session_id=%s", self._session_id)
 
     # ------------------------------------------------------------------
     # Internal helpers
