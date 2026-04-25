@@ -125,6 +125,29 @@ async def main():
 asyncio.run(main())
 ```
 
+### Upload local files to the sandbox before running
+
+All sessions accept an `upload_files` argument (a `dict[str, str]`) mapping
+local host paths to target sandbox paths. Files are uploaded automatically when
+the session opens, before system prompt setup, skill installation, and MCP
+registration.
+
+```python
+import asyncio
+from harnesdk import HermesAgentSession
+
+async def main():
+    async with HermesAgentSession(
+        upload_files={
+            "/Users/alaeddineabdessalem/Library/Application Support/JetBrains/PyCharm2026.1/scratches/monitor.png": "/tmp/monitor.png",
+        }
+    ) as session:
+        result = await session.run("Use /tmp/monitor.png to describe the screen content")
+        print(result.output)
+
+asyncio.run(main())
+```
+
 ### Run and serve an app from the sandbox (Jupyter)
 
 ```python
