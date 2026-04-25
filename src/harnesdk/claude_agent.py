@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 from harnesdk.agent import (
     AgentResult,
@@ -46,10 +46,11 @@ class _ClaudeStreamProcessor(StreamProcessor):
     ``session_id`` is captured from the final ``result`` event.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, log_level: Literal["default", "all"] = "default") -> None:
         super().__init__()
         self._buf = ""
         self._session_id: str | None = None
+        self._log_level: Literal["default", "all"] = log_level
 
     def feed(self, data: str) -> list[str]:
         out: list[str] = []
@@ -77,6 +78,8 @@ class _ClaudeStreamProcessor(StreamProcessor):
             return [line]
 
         self.events.append(event)
+        if self._log_level == "all":
+            return [line]
         out: list[str] = []
 
         if event.get("type") == "assistant":
@@ -101,6 +104,8 @@ class ClaudeAgentSession(AgentSession):
     Args:
         api_key:          Anthropic API key.  Falls back to the
                           ``ANTHROPIC_API_KEY`` environment variable.
+        log_level:        Streaming verbosity. Set to ``"all"`` to emit every
+                          raw JSONL event line from Claude Code.
         (see :class:`~harnesdk.agent.AgentSession` for common kwargs)
 
     Notes:
@@ -120,6 +125,7 @@ class ClaudeAgentSession(AgentSession):
         self,
         *,
         api_key: str | None = None,
+        log_level: Literal["default", "all"] = "default",
         template: str | None = None,
         timeout: int = 300,
         system_prompt: str | None = None,
@@ -130,6 +136,7 @@ class ClaudeAgentSession(AgentSession):
         super().__init__(
             template=template,
             timeout=timeout,
+            log_level=log_level,
             system_prompt=system_prompt,
             working_dir=working_dir,
             skills=skills,
@@ -224,4 +231,4 @@ class ClaudeAgentSession(AgentSession):
         )
 
     def _make_stream_processor(self) -> StreamProcessor:
-        return _ClaudeStreamProcessor()
+        return _ClaudeStreamProcessor(log_level=self.log_level)

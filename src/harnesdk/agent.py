@@ -38,7 +38,7 @@ import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 from e2b import AsyncSandbox
 
@@ -172,6 +172,9 @@ class AgentSession(ABC):
                           subclass's :attr:`default_template` when ``None``.
         timeout:          Sandbox inactivity timeout in seconds
                           (default: 300 – 5 minutes).
+        log_level:        Streaming verbosity. ``"default"`` emits only parsed
+                          assistant text; ``"all"`` emits every raw stdout
+                          line produced by the agent process.
         system_prompt:    Optional instruction block.  Each subclass decides
                           how to materialize it inside the sandbox (e.g.
                           ``CLAUDE.md`` for Claude Code, ``AGENTS.md`` for
@@ -199,6 +202,7 @@ class AgentSession(ABC):
         *,
         template: str | None = None,
         timeout: int = 300,
+        log_level: Literal["default", "all"] = "default",
         system_prompt: str | None = None,
         working_dir: str = "/home/user",
         skills: list[Skill | str] | None = None,
@@ -211,6 +215,9 @@ class AgentSession(ABC):
                 f"receive a `template` argument."
             )
         self.timeout = timeout
+        if log_level not in ("default", "all"):
+            raise ValueError("log_level must be either 'default' or 'all'.")
+        self.log_level: Literal["default", "all"] = log_level
         self.system_prompt = system_prompt
         self.working_dir = working_dir
         self.skills: list[Skill] = [
@@ -346,6 +353,7 @@ class AgentSession(ABC):
         result = await self.sandbox.commands.run(  # type: ignore[union-attr]
             cmd,
             cwd=self.working_dir,
+            timeout=self.timeout,
         )
 
         agent_result = self._parse_output(result.stdout, result.exit_code)

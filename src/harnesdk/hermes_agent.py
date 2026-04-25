@@ -38,7 +38,7 @@ from __future__ import annotations
 
 import json
 import shlex
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 from harnesdk.agent import (
     AgentResult,
@@ -163,6 +163,7 @@ class HermesAgentSession(AgentSession):
         model: str | None = None,
         provider: str | None = None,
         api_key: str | None = None,
+        log_level: Literal["default", "all"] = "default",
         env: dict[str, str] | None = None,
         toolsets: list[str] | None = None,
         worktree: bool = False,
@@ -177,6 +178,7 @@ class HermesAgentSession(AgentSession):
         super().__init__(
             template=template,
             timeout=timeout,
+            log_level=log_level,
             system_prompt=system_prompt,
             working_dir=working_dir,
             skills=skills,

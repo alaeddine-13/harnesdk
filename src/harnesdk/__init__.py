@@ -9,6 +9,7 @@ from harnesdk.agent import (
 )
 from harnesdk.claude_agent import ClaudeAgentSession
 from harnesdk.hermes_agent import HermesAgentSession
+from harnesdk.opencode_agent import OpenCodeAgentSession
 
 __all__ = [
     "AgentResult",
@@ -16,6 +17,7 @@ __all__ = [
     "ClaudeAgentSession",
     "HermesAgentSession",
     "McpServer",
+    "OpenCodeAgentSession",
     "Skill",
     "StreamProcessor",
 ]

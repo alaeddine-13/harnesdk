@@ -36,10 +36,11 @@ harnesdk ships one concrete session per supported harness. They all share the
 same interface — ``open`` / ``close``, ``run``, ``stream``, async-context-manager
 — defined by the abstract :class:`AgentSession` base class.
 
-| Harness            | Class                 | Default template |
-| ------------------ | --------------------- | ---------------- |
-| Anthropic Claude   | `ClaudeAgentSession`  | `claude`         |
-| Nous Hermes Agent  | `HermesAgentSession`  | `hermes-agent`   |
+| Harness            | Class                  | Default template |
+| ------------------ | ---------------------- | ---------------- |
+| Anthropic Claude   | `ClaudeAgentSession`   | `claude`         |
+| Nous Hermes Agent  | `HermesAgentSession`   | `hermes-agent`   |
+| OpenCode           | `OpenCodeAgentSession` | `opencode`       |
 
 ### Run Claude Code and get output
 
@@ -62,7 +63,7 @@ import asyncio
 from harnesdk import ClaudeAgentSession
 
 async def main():
-    async with ClaudeAgentSession() as session:
+    async with ClaudeAgentSession(log_level="all") as session:
         async for chunk in session.stream("Create a hello world HTTP server in Go"):
             print(chunk, end="", flush=True)
 
@@ -95,6 +96,30 @@ async def main():
             "and don't get back to me with further questions. Just make sure "
             "to deliver the output video at /tmp/out.mp4"
         )
+        print(result.output)
+
+asyncio.run(main())
+```
+
+### Run OpenCode
+
+This mirrors the CLI invocation:
+
+```bash
+opencode run --format json --model anthropic/claude-3-5-sonnet-20241022 "..."
+```
+
+```python
+import asyncio
+import os
+from harnesdk import OpenCodeAgentSession
+
+async def main():
+    async with OpenCodeAgentSession(
+        model="anthropic/claude-3-5-sonnet-20241022",
+        api_key=os.environ["ANTHROPIC_API_KEY"],
+    ) as session:
+        result = await session.run("Create a hello world HTTP server in Go")
         print(result.output)
 
 asyncio.run(main())
