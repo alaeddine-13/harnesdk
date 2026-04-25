@@ -1,19 +1,31 @@
 """
 agent.py
 ~~~~~~~~~~~~~~~~
-A clean Python abstraction for running AI agent harnesses inside E2B sandboxes.
+Harness-agnostic abstraction for running AI agent CLIs inside E2B sandboxes.
 
-Usage example:
+This module defines :class:`AgentSession`, an **abstract base class** that
+implements the common sandbox lifecycle, command execution, and streaming
+orchestration shared by every supported harness.  Concrete subclasses live in
+sibling modules:
+
+* :class:`harnesdk.claude_agent.ClaudeAgentSession` – Anthropic *Claude Code*
+* :class:`harnesdk.hermes_agent.HermesAgentSession` – Nous Research *Hermes Agent*
+
+Each subclass plugs in harness-specific behavior (environment variables,
+system-prompt file, skill installer, MCP registration, command-line flags,
+output parser) through a small set of hooks while reusing the lifecycle,
+``run`` / ``stream`` orchestration, and data types defined here.
+
+Usage example::
 
     import asyncio
-    from harnesdk.agent import AgentSession
+    from harnesdk import ClaudeAgentSession
 
     async def main():
-        async with AgentSession() as session:
+        async with ClaudeAgentSession() as session:
             result = await session.run("Create a hello world HTTP server in Go")
             print(result.output)
 
-            # Stream output in real time
             async for chunk in session.stream("Add unit tests"):
                 print(chunk, end="", flush=True)
 
@@ -23,54 +35,12 @@ Usage example:
 from __future__ import annotations
 
 import asyncio
-import json
-import os
-from contextlib import asynccontextmanager
+from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import AsyncIterator, Optional
+from typing import ClassVar
 
 from e2b import AsyncSandbox
-
-
-# ---------------------------------------------------------------------------
-# Public enumerations
-# ---------------------------------------------------------------------------
-
-class AgentHarness(str, Enum):
-    """Supported agent harnesses.
-
-    New harnesses (e.g. Aider, Devin, OpenHands) can be added here later
-    without changing the public API surface.
-    """
-    CLAUDE_CODE = "claude_code"
-
-
-class SandboxTemplate(str, Enum):
-    """E2B sandbox templates.
-
-    Each harness has a sensible default (see _HARNESS_DEFAULTS), but callers
-    can override this when a custom template has been built on top of the base.
-    """
-    CLAUDE = "claude"
-
-
-# ---------------------------------------------------------------------------
-# Internal defaults
-# ---------------------------------------------------------------------------
-
-_HARNESS_DEFAULTS: dict[AgentHarness, SandboxTemplate] = {
-    AgentHarness.CLAUDE_CODE: SandboxTemplate.CLAUDE,
-}
-
-_HARNESS_ENTRY_POINTS: dict[AgentHarness, str] = {
-    AgentHarness.CLAUDE_CODE: "claude",
-}
-
-_HARNESS_AGENT_IDS: dict[AgentHarness, str] = {
-    AgentHarness.CLAUDE_CODE: "claude-code",
-}
-
 
 # ---------------------------------------------------------------------------
 # MCP server type
@@ -80,32 +50,31 @@ _HARNESS_AGENT_IDS: dict[AgentHarness, str] = {
 class McpServer:
     """An MCP server to register with the agent before running.
 
-    Maps directly to the ``claude mcp add`` CLI arguments::
-
-        McpServer(
-            name="dansugc",
-            url="https://dansugc.com/api/mcp",
-            transport="http",
-            scope="user",
-            headers={"Authorization": "Bearer dsk_YOUR_API_KEY"},
-        )
-        # → claude mcp add --transport http -s user dansugc \\
-        #     https://dansugc.com/api/mcp \\
-        #     -H "Authorization: Bearer dsk_YOUR_API_KEY"
+    Supports both **HTTP/SSE** transports (``url``) and **stdio** transports
+    (``command`` + ``args``).  Which fields are used depends on the harness
+    and the ``transport`` selected.
 
     Attributes:
-        name:       Identifier for this MCP server (used in ``claude mcp add``).
-        url:        The MCP server endpoint URL.
-        transport:  Transport protocol (default: ``"http"``).
-        scope:      Registration scope passed via ``-s`` (default: ``"user"``).
-        headers:    Optional HTTP headers to forward with every request,
-                    e.g. ``{"Authorization": "Bearer <token>"}``.
+        name:       Identifier for this MCP server.
+        url:        Endpoint URL (for HTTP/SSE transports).
+        transport:  Transport protocol (``"http"``, ``"sse"``, ``"stdio"``).
+                    Defaults to ``"http"``.
+        scope:      Registration scope – used by Claude Code's ``claude mcp
+                    add -s`` flag.  Harnesses that don't have a scope concept
+                    ignore this value.
+        headers:    Optional HTTP headers (typically for ``Authorization``).
+        command:    Executable name for stdio MCP servers.
+        args:       Arguments to pass to ``command``.
+        env:        Environment variables to forward to the MCP process.
     """
     name: str
-    url: str
+    url: str | None = None
     transport: str = "http"
     scope: str = "user"
-    headers: Optional[dict[str, str]] = None
+    headers: dict[str, str] | None = None
+    command: str | None = None
+    args: list[str] | None = None
+    env: dict[str, str] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -118,19 +87,19 @@ class Skill:
 
     Two installation patterns are supported:
 
-    * **Named skill** – installs from the registry::
+    * **Named skill** – installs from the registry by name::
 
         Skill(name="commit")
-        # → npx skill add commit -a <harness-agent-id>
 
-    * **URL skill** – installs from a GitHub (or other) URL::
+    * **URL skill** – installs from a Git (or other) URL::
 
         Skill(name="customer-research",
               url="https://github.com/coreyhaines31/marketingskills")
-        # → npx skills add <url> --skill customer-research
+
+    The concrete command executed differs per harness (see each subclass).
     """
     name: str = "*"
-    url: Optional[str] = None
+    url: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -142,79 +111,105 @@ class AgentResult:
     """The outcome of a completed agent run.
 
     Attributes:
-        output:      Combined stdout text from the agent process.
-        session_id:  Conversation session ID returned by Claude Code's JSON
-                     output format.  ``None`` for harnesses that don't expose
-                     one, or when the output could not be parsed.
-        raw_events:  All parsed JSONL event objects emitted during a streaming
-                     run.  Empty for non-streaming runs.
+        output:      Final text response from the agent.
+        session_id:  Conversation session ID, if the harness exposes one.
+        raw_events:  Parsed structured events (e.g. JSONL) emitted during a
+                     streaming run.  Empty for harnesses that stream plain
+                     text or for non-streaming runs.
         exit_code:   Process exit code from the sandbox command.
     """
     output: str
-    session_id: Optional[str] = None
+    session_id: str | None = None
     raw_events: list[dict] = field(default_factory=list)
     exit_code: int = 0
 
 
 # ---------------------------------------------------------------------------
-# Core session class
+# Stream processor
 # ---------------------------------------------------------------------------
 
-class AgentSession:
-    """Manages the lifecycle of an agent harness running inside an E2B sandbox.
+class StreamProcessor:
+    """Incrementally consumes stdout from an agent CLI.
 
-    The session owns the sandbox: it creates it on ``__aenter__`` and kills it
-    on ``__aexit__``.  This means you should always use it as an async context
-    manager unless you call ``open()`` / ``close()`` manually.
+    The default implementation simply passes text through unchanged.  Harnesses
+    with a structured output format (e.g. Claude Code's JSONL) provide their
+    own subclass that buffers lines, parses them, and extracts text fragments
+    plus metadata such as the session id.
+    """
+
+    def __init__(self) -> None:
+        self.events: list[dict] = []
+
+    def feed(self, data: str) -> list[str]:
+        """Consume a chunk of stdout and return text to emit to the caller."""
+        return [data] if data else []
+
+    def flush(self) -> list[str]:
+        """Emit any buffered text after the process exits."""
+        return []
+
+    @property
+    def session_id(self) -> str | None:
+        """Session id observed so far, if any."""
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Abstract session
+# ---------------------------------------------------------------------------
+
+class AgentSession(ABC):
+    """Abstract base class managing an AI agent CLI inside an E2B sandbox.
+
+    Subclasses implement :meth:`_env_vars` and :meth:`_build_command` at
+    minimum, and may override the lifecycle hooks (:meth:`_setup_system_prompt`,
+    :meth:`_install_skills`, :meth:`_register_mcps`) and the output parsers
+    (:meth:`_parse_output`, :meth:`_make_stream_processor`) to fit the
+    particular harness.
 
     Args:
-        harness:          Which agent harness to run (default: ``CLAUDE_CODE``).
-        template:         E2B sandbox template to use.  Defaults to the
-                          harness-specific default when omitted.
-        api_key:          Anthropic API key.  Falls back to the
-                          ``ANTHROPIC_API_KEY`` environment variable.
-        timeout:          Sandbox inactivity timeout
-                          (default: 300 — 5 minutes).
-        system_prompt:    Optional instruction block written to ``CLAUDE.md``
-                          inside the sandbox before the first run.
-        working_dir:      Working directory used for all commands executed
+        template:         E2B sandbox template name.  Falls back to the
+                          subclass's :attr:`default_template` when ``None``.
+        timeout:          Sandbox inactivity timeout in seconds
+                          (default: 300 – 5 minutes).
+        system_prompt:    Optional instruction block.  Each subclass decides
+                          how to materialize it inside the sandbox (e.g.
+                          ``CLAUDE.md`` for Claude Code, ``AGENTS.md`` for
+                          Hermes).
+        working_dir:      Working directory used for every command executed
                           inside the sandbox (default: ``/home/user``).
         skills:           Optional list of :class:`Skill` instances (or plain
                           strings for simple named skills) to install during
-                          sandbox setup.  Named skills use
-                          ``npx skill add <name> -a <agent-id>``; URL skills
-                          use ``npx skills add <url> --skill <name>``.
+                          sandbox setup.
         mcps:             Optional list of :class:`McpServer` instances to
-                          register via ``claude mcp add`` during sandbox setup.
+                          register during sandbox setup.
 
-    Examples::
+    Example::
 
-        # Simple one-shot run
-        async with AgentSession() as session:
+        async with ClaudeAgentSession() as session:
             result = await session.run("Write a fizzbuzz in Rust")
             print(result.output)
-
-        # Multi-turn conversation
-        async with AgentSession(system_prompt="You write only Go code.") as s:
-            r1 = await s.run("Create an HTTP server")
-            r2 = await s.run("Add a /healthz endpoint")   # continues same chat
     """
+
+    #: Default sandbox template name for this harness.  Subclasses override.
+    default_template: ClassVar[str] = ""
 
     def __init__(
         self,
         *,
-        harness: AgentHarness = AgentHarness.CLAUDE_CODE,
-        template: Optional[SandboxTemplate] = None,
-        api_key: Optional[str] = None,
+        template: str | None = None,
         timeout: int = 300,
-        system_prompt: Optional[str] = None,
+        system_prompt: str | None = None,
         working_dir: str = "/home/user",
-        skills: Optional[list[Skill | str]] = None,
-        mcps: Optional[list[McpServer]] = None,
+        skills: list[Skill | str] | None = None,
+        mcps: list[McpServer] | None = None,
     ) -> None:
-        self.harness = harness
-        self.template = template or _HARNESS_DEFAULTS[harness]
-        self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
+        self.template = template or self.default_template
+        if not self.template:
+            raise ValueError(
+                f"{type(self).__name__} must set `default_template` or "
+                f"receive a `template` argument."
+            )
         self.timeout = timeout
         self.system_prompt = system_prompt
         self.working_dir = working_dir
@@ -224,14 +219,75 @@ class AgentSession:
         ]
         self.mcps: list[McpServer] = list(mcps or [])
 
-        self.sandbox: Optional[AsyncSandbox] = None
-        self._session_id: Optional[str] = None   # tracks last conversation id
+        self.sandbox: AsyncSandbox | None = None
+        self._session_id: str | None = None
+
+    # ------------------------------------------------------------------
+    # Abstract hooks
+    # ------------------------------------------------------------------
+
+    @abstractmethod
+    def _env_vars(self) -> dict[str, str]:
+        """Environment variables (API keys, etc.) to inject into the sandbox."""
+
+    @abstractmethod
+    def _build_command(self, prompt: str, *, streaming: bool) -> str:
+        """Shell command that runs the agent CLI with *prompt*.
+
+        Implementations should include any resume/continue flag needed to
+        preserve multi-turn state, using :attr:`_session_id` if appropriate.
+        """
+
+    # ------------------------------------------------------------------
+    # Overridable hooks (default: no-op)
+    # ------------------------------------------------------------------
+
+    async def _setup_system_prompt(self) -> None:  # noqa: B027
+        """Write the system prompt somewhere the agent will pick it up.
+
+        Default: no-op.  Subclasses override to write the appropriate file.
+        """
+
+    async def _install_skills(self) -> None:  # noqa: B027
+        """Install every :class:`Skill` in :attr:`skills` into the sandbox.
+
+        Default: no-op.  Subclasses override with their harness-specific
+        installer.
+        """
+
+    async def _register_mcps(self) -> None:  # noqa: B027
+        """Register every :class:`McpServer` in :attr:`mcps` with the agent.
+
+        Default: no-op.  Subclasses override to invoke the appropriate CLI or
+        write the appropriate config file.
+        """
+
+    # ------------------------------------------------------------------
+    # Output parsing hooks
+    # ------------------------------------------------------------------
+
+    def _parse_output(self, stdout: str, exit_code: int) -> AgentResult:
+        """Convert the non-streaming ``stdout`` into an :class:`AgentResult`.
+
+        The default implementation returns the raw stdout as the output with
+        no session id.  Subclasses with a structured output format should
+        override this.
+        """
+        return AgentResult(output=stdout.strip(), exit_code=exit_code)
+
+    def _make_stream_processor(self) -> StreamProcessor:
+        """Return a fresh :class:`StreamProcessor` for a streaming run.
+
+        The default pass-through processor is suitable for harnesses that
+        stream plain text to stdout.
+        """
+        return StreamProcessor()
 
     # ------------------------------------------------------------------
     # Context-manager protocol
     # ------------------------------------------------------------------
 
-    async def __aenter__(self) -> "AgentSession":
+    async def __aenter__(self) -> AgentSession:
         await self.open()
         return self
 
@@ -252,43 +308,17 @@ class AgentSession:
             return
 
         self.sandbox = await AsyncSandbox.create(
-            self.template.value,
-            envs={"ANTHROPIC_API_KEY": self.api_key},
+            self.template,
+            envs=self._env_vars(),
             timeout=self.timeout,
         )
 
-        if self.system_prompt:
-            await self.sandbox.files.write(
-                f"{self.working_dir}/CLAUDE.md",
-                self.system_prompt,
-            )
-
-        agent_id = _HARNESS_AGENT_IDS[self.harness]
-        for skill in self.skills:
-            if skill.url:
-                cmd = f"npx skills add {skill.url} --skill {skill.name} -a {agent_id} -y"
-            else:
-                cmd = f"npx skills add {skill.name} -a {agent_id} -y"
-            await self.sandbox.commands.run(cmd, cwd=self.working_dir)
-
-        for mcp in self.mcps:
-            cmd = (
-                f"claude mcp add --transport {mcp.transport}"
-                f" -s {mcp.scope}"
-                f" {mcp.name}"
-                f" {mcp.url}"
-            )
-            if mcp.headers:
-                for header_name, header_value in mcp.headers.items():
-                    safe_value = header_value.replace('"', '\\"')
-                    cmd += f' -H "{header_name}: {safe_value}"'
-            await self.sandbox.commands.run(cmd, cwd=self.working_dir)
+        await self._setup_system_prompt()
+        await self._install_skills()
+        await self._register_mcps()
 
     async def close(self) -> None:
-        """Terminate the sandbox and free all resources.
-
-        Called automatically by the async context manager.
-        """
+        """Terminate the sandbox and free all resources."""
         if self.sandbox is not None:
             await self.sandbox.kill()
             self.sandbox = None
@@ -298,50 +328,39 @@ class AgentSession:
     # Execution
     # ------------------------------------------------------------------
 
-    async def run(
-        self,
-        prompt: str,
-    ) -> AgentResult:
+    async def run(self, prompt: str) -> AgentResult:
         """Execute the agent with *prompt* and wait for it to finish.
 
         Args:
-            prompt:  The task description to hand to the agent.
+            prompt:  Task description to hand to the agent.
 
         Returns:
-            An :class:`AgentResult` with the full output text and metadata.
+            An :class:`AgentResult` with the final text and metadata.
 
         Raises:
-            RuntimeError: If :meth:`open` has not been called (or the context
-                          manager has not been entered).
+            RuntimeError: If :meth:`open` hasn't been called yet.
         """
         self._require_open()
         cmd = self._build_command(prompt, streaming=False)
-        # TODO: this actually will timeout when claude code runs a background server
+        # TODO: this actually will timeout when the agent runs a background server
         result = await self.sandbox.commands.run(  # type: ignore[union-attr]
             cmd,
             cwd=self.working_dir,
         )
 
-        agent_result = self._parse_json_output(result.stdout, result.exit_code)
+        agent_result = self._parse_output(result.stdout, result.exit_code)
         if agent_result.session_id:
             self._session_id = agent_result.session_id
         return agent_result
 
-    async def stream(
-        self,
-        prompt: str,
-    ) -> AsyncIterator[str]:
+    async def stream(self, prompt: str) -> AsyncIterator[str]:
         """Execute the agent and yield text chunks as they arrive.
 
-        The returned async-generator yields individual text fragments so you
-        can print or process them in real time.  The conversation session ID
-        (if any) is captured automatically after the stream is exhausted.
-
         Args:
-            prompt:  The task description to hand to the agent.
+            prompt:  Task description to hand to the agent.
 
         Yields:
-            Raw text chunks from the agent's stdout stream.
+            Text fragments in roughly the order the agent produces them.
 
         Example::
 
@@ -351,46 +370,26 @@ class AgentSession:
         self._require_open()
         cmd = self._build_command(prompt, streaming=True)
 
-        events: list[dict] = []
-        line_buf = ""
+        processor = self._make_stream_processor()
         out_queue: asyncio.Queue[str | object] = asyncio.Queue()
         stream_end = object()
 
-        async def _emit_jsonl_line(line: str) -> None:
-            if not line:
-                return
-            try:
-                event = json.loads(line)
-                events.append(event)
-                if event.get("type") == "assistant":
-                    for block in event.get("message", {}).get("content", []):
-                        if block.get("type") == "text":
-                            text = block["text"]
-                            if text:
-                                await out_queue.put(text)
-            except json.JSONDecodeError:
-                await out_queue.put(line)
-
         async def _on_stdout(data: str) -> None:
-            nonlocal line_buf
-            line_buf += data
-            while "\n" in line_buf:
-                raw_line, line_buf = line_buf.split("\n", 1)
-                await _emit_jsonl_line(raw_line.strip())
+            for chunk in processor.feed(data):
+                if chunk:
+                    await out_queue.put(chunk)
 
         async def _run_command() -> None:
-            nonlocal line_buf
             try:
-                # TODO: this actually will timeout when claude code runs a background server
+                # TODO: this actually will timeout when the agent runs a background server
                 await self.sandbox.commands.run(  # type: ignore[union-attr]
                     cmd,
                     cwd=self.working_dir,
                     on_stdout=_on_stdout,
                 )
-                tail = line_buf.strip()
-                if tail:
-                    await _emit_jsonl_line(tail)
-                    line_buf = ""
+                for chunk in processor.flush():
+                    if chunk:
+                        await out_queue.put(chunk)
             finally:
                 await out_queue.put(stream_end)
 
@@ -404,11 +403,9 @@ class AgentSession:
         finally:
             await run_task
 
-        # After the run, extract the session id from any "result" event
-        for event in events:
-            if event.get("type") == "result" and "session_id" in event:
-                self._session_id = event["session_id"]
-                break
+        session_id = processor.session_id
+        if session_id:
+            self._session_id = session_id
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -417,54 +414,6 @@ class AgentSession:
     def _require_open(self) -> None:
         if self.sandbox is None:
             raise RuntimeError(
-                "AgentSession is not open.  Use it as an async context manager "
-                "or call `await session.open()` first."
+                f"{type(self).__name__} is not open.  Use it as an async "
+                "context manager or call `await session.open()` first."
             )
-
-    def _build_command(
-        self,
-        prompt: str,
-        *,
-        streaming: bool,
-    ) -> str:
-        """Construct the shell command string for the chosen harness."""
-        entry = _HARNESS_ENTRY_POINTS[self.harness]
-
-        parts = [
-            entry,
-            "--dangerously-skip-permissions",
-        ]
-
-        if streaming:
-            parts += ["--output-format", "stream-json", "--verbose"]
-        else:
-            parts += ["--output-format", "json"]
-
-        if self._session_id:
-            parts += ["--resume", self._session_id]
-
-        # Safely quote the prompt to avoid shell injection
-        safe_prompt = prompt.replace('"', '\\"')
-        parts += ["-p", f'"{safe_prompt}"']
-
-        return " ".join(parts)
-
-    def _parse_json_output(self, stdout: str, exit_code: int) -> AgentResult:
-        """Parse Claude Code's JSON output format into an :class:`AgentResult`."""
-        stdout = stdout.strip()
-        session_id: Optional[str] = None
-        output = stdout
-
-        try:
-            data = json.loads(stdout)
-            session_id = data.get("session_id")
-            # Claude Code puts the final answer in result.result
-            output = data.get("result", stdout)
-        except (json.JSONDecodeError, AttributeError):
-            pass  # Treat raw stdout as the output
-
-        return AgentResult(
-            output=output,
-            session_id=session_id,
-            exit_code=exit_code,
-        )
