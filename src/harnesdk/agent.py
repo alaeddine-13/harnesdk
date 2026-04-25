@@ -415,6 +415,7 @@ class AgentSession(ABC):
                     cmd,
                     cwd=self.working_dir,
                     on_stdout=_on_stdout,
+                    timeout=self.timeout,
                 )
                 for chunk in processor.flush():
                     if chunk:

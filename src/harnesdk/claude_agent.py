@@ -14,7 +14,7 @@ Example::
     from harnesdk import ClaudeAgentSession
 
     async def main():
-        async with ClaudeAgentSession() as session:
+        async with ClaudeAgentSession(model="sonnet") as session:
             result = await session.run("Write a fizzbuzz in Rust")
             print(result.output)
 
@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 from typing import ClassVar, Literal
 
 from harnesdk.agent import (
@@ -102,6 +103,8 @@ class ClaudeAgentSession(AgentSession):
     """Agent session wired up for Anthropic's *Claude Code* CLI.
 
     Args:
+        model:            Optional Claude Code model id or alias (e.g. ``"sonnet"``,
+                          ``"opus"``, or a full model name).  Mapped to ``--model``.
         api_key:          Anthropic API key.  Falls back to the
                           ``ANTHROPIC_API_KEY`` environment variable.
         log_level:        Streaming verbosity. Set to ``"all"`` to emit every
@@ -124,6 +127,7 @@ class ClaudeAgentSession(AgentSession):
     def __init__(
         self,
         *,
+        model: str | None = None,
         api_key: str | None = None,
         log_level: Literal["default", "all"] = "default",
         template: str | None = None,
@@ -142,6 +146,7 @@ class ClaudeAgentSession(AgentSession):
             skills=skills,
             mcps=mcps,
         )
+        self.model = model
         self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
 
     # ------------------------------------------------------------------
@@ -197,7 +202,11 @@ class ClaudeAgentSession(AgentSession):
         parts = [
             self._entrypoint,
             "--dangerously-skip-permissions",
+            '--disallowedTools "Agent,AskUserQuestion,CronCreate,CronDelete,CronList,EnterWorktree,ExitWorktree,NotebookEdit,PowerShell,SendMessage,TaskCreate,TaskGet,TaskList,TaskOutput,TaskStop,TaskUpdate,TeamCreate,TeamDelete"'
         ]
+
+        if self.model:
+            parts += ["--model", shlex.quote(self.model)]
 
         if streaming:
             parts += ["--output-format", "stream-json", "--verbose"]
