@@ -195,6 +195,7 @@ class OpenCodeAgentSession(AgentSession):
         working_dir: str = "/home/user",
         skills: list[Skill | str] | None = None,
         mcps: list[McpServer] | None = None,
+        env: dict[str, str] | None = None,
     ) -> None:
         super().__init__(
             template=template,
@@ -204,6 +205,7 @@ class OpenCodeAgentSession(AgentSession):
             working_dir=working_dir,
             skills=skills,
             mcps=mcps,
+            env=env,
         )
         self.model = model
         self.provider = provider

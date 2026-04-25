@@ -190,6 +190,8 @@ class AgentSession(ABC):
                           sandbox setup.
         mcps:             Optional list of :class:`McpServer` instances to
                           register during sandbox setup.
+        env:              Optional environment variables to inject into the
+                          sandbox in addition to harness defaults.
 
     Example::
 
@@ -211,6 +213,7 @@ class AgentSession(ABC):
         working_dir: str = "/home/user",
         skills: list[Skill | str] | None = None,
         mcps: list[McpServer] | None = None,
+        env: dict[str, str] | None = None,
     ) -> None:
         self.template = template or self.default_template
         if not self.template:
@@ -229,6 +232,7 @@ class AgentSession(ABC):
             for s in (skills or [])
         ]
         self.mcps: list[McpServer] = list(mcps or [])
+        self.env: dict[str, str] = dict(env or {})
 
         self.sandbox: AsyncSandbox | None = None
         self._session_id: str | None = None
@@ -325,9 +329,11 @@ class AgentSession(ABC):
             self.template,
             self.timeout,
         )
+        envs = self._env_vars()
+        envs.update(self.env)
         self.sandbox = await AsyncSandbox.create(
             self.template,
-            envs=self._env_vars(),
+            envs=envs,
             timeout=self.timeout,
         )
 
