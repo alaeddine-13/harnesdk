@@ -174,14 +174,14 @@ class ClaudeAgentSession(AgentSession):
                 )
             cmd = (
                 f"claude mcp add --transport {mcp.transport}"
-                f" -s {mcp.scope}"
+                f" --scope {mcp.scope}"
                 f" {mcp.name}"
                 f" {mcp.url}"
             )
             if mcp.headers:
                 for header_name, header_value in mcp.headers.items():
                     safe_value = header_value.replace('"', '\\"')
-                    cmd += f' -H "{header_name}: {safe_value}"'
+                    cmd += f' --header "{header_name}: {safe_value}"'
             await self.sandbox.commands.run(cmd, cwd=self.working_dir)  # type: ignore[union-attr]
 
     # ------------------------------------------------------------------

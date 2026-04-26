@@ -44,6 +44,7 @@ from typing import ClassVar, Literal
 
 from e2b import AsyncSandbox
 
+from harnesdk.cli import console
 from harnesdk.logging_utils import build_logger
 
 LOGGER = build_logger("harnesdk.agent")
